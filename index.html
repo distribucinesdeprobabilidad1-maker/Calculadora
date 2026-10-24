@@ -902,12 +902,45 @@ function logExit(reason){
 }
 function logReturn(){
   if(!examState.active || !examState.pendingExit) return;
-  examState.pendingExit.returnedAt=Date.now();
+  var exitEvent=examState.pendingExit;
+  var now=Date.now();
+  exitEvent.returnedAt=now;
   examState.pendingExit=null;
-  lastReturnLog=Date.now();
+  lastReturnLog=now;
   saveExamSession();
   updateAlertsUI();
+  // Antes solo se actualizaba el contador; ahora se avisa la duración al regresar.
+  showReturnDurationNotice(Math.max(0,now-exitEvent.at));
 }
+
+// Mensaje de duración temporal: no agrega elementos permanentes al diseño.
+var returnNoticeTimer=null;
+function showReturnDurationNotice(durationMs){
+  var existing=document.getElementById('returnDurationNotice');
+  if(existing) existing.remove();
+  if(returnNoticeTimer!==null){clearTimeout(returnNoticeTimer);returnNoticeTimer=null;}
+  var message=document.createElement('div');
+  message.id='returnDurationNotice';
+  message.setAttribute('role','status');
+  message.setAttribute('aria-live','polite');
+  message.textContent='Regresaste a la calculadora · '+formatDuration(durationMs);
+  Object.assign(message.style,{
+    position:'fixed',left:'50%',top:'64px',transform:'translateX(-50%)',
+    padding:'12px 16px',borderRadius:'9px',zIndex:'11001',
+    background:'var(--board-2)',border:'1px solid var(--line)',
+    color:'var(--chalk)',boxShadow:'0 7px 24px rgba(0,0,0,.23)',
+    fontFamily:'inherit',fontSize:'12px',fontWeight:'600',
+    maxWidth:'90vw',whiteSpace:'normal',textAlign:'center',
+    pointerEvents:'none',opacity:'1',transition:'opacity 200ms ease'
+  });
+  document.body.appendChild(message);
+  returnNoticeTimer=setTimeout(function(){
+    message.style.opacity='0';
+    setTimeout(function(){message.remove();},220);
+    returnNoticeTimer=null;
+  },4200);
+}
+
 // Aviso temporal: el contenedor se elimina completamente del DOM.
 var trackingToastTimer=null;
 function showTrackingToast(enabled){
@@ -944,7 +977,7 @@ function toggleExitTracking(){
 
 function formatDuration(ms){
   if(ms===null||ms===undefined) return 'sin regreso registrado';
-  var s=Math.round(ms/1000);
+  var s=Math.max(1,Math.ceil(ms/1000));
   if(s<60) return 'fuera '+s+' seg';
   var m=Math.floor(s/60), rs=s%60;
   return 'fuera '+m+' min '+rs+' seg';
@@ -1059,6 +1092,11 @@ document.getElementById('pinSubmit').addEventListener('click', function(){
 });
 
 function endExam(){
+  // Cerrar cualquier salida pendiente antes de calcular los tiempos registrados.
+  if(examState.pendingExit){
+    examState.pendingExit.returnedAt=Date.now();
+    examState.pendingExit=null;
+  }
   examState.active=false;
   clearInterval(examState.timerInterval);
   releaseWakeLock();
@@ -1071,7 +1109,19 @@ function endExam(){
   if(wrapEl) document.body.insertBefore(wrapEl, overlay);
   overlay.classList.remove('show');
   var totalMs=examState.startTime?(Date.now()-examState.startTime):0;
-  alert('Modo examen finalizado.\nDuración total: '+formatElapsed(totalMs)+'\nSalidas detectadas: '+examState.exits.length);
+  var outsideMs=examState.exits.reduce(function(total,event){
+    return total+Math.max(1000,Math.ceil(((event.returnedAt||Date.now())-event.at)/1000)*1000);
+  },0);
+  var details=examState.exits.slice(0,15).map(function(event,index){
+    var ms=(event.returnedAt===null)?null:Math.max(0,event.returnedAt-event.at);
+    return (index+1)+'. '+formatDuration(ms);
+  });
+  var result='Modo examen finalizado.\nDuración total: '+formatElapsed(totalMs)+
+    '\nSalidas detectadas: '+examState.exits.length+
+    '\nTiempo registrado fuera: '+formatElapsed(outsideMs);
+  if(details.length){ result+='\n\nDetalle de salidas:\n'+details.join('\n'); }
+  if(examState.exits.length>15){result+='\n... y '+(examState.exits.length-15)+' salidas más.';}
+  alert(result);
 }
 /* Recuperar una sesión en curso tras recargar o volver a la página. */
 (function resumeExamIfPending(){
