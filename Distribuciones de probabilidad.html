@@ -847,115 +847,102 @@ input.addEventListener('keydown', function(e){ if(e.key==='Enter'){ input.blur()
 })();
 
 /* ---------------- modo examen ---------------- */
-/* El seguimiento puede activarse o desactivarse desde Hipergeométrica.
-   Los eventos representan señales del navegador, no prueba de conducta.
-   El estado del seguimiento es visible y se conserva por navegador. */
 var EXAM_KEY='calc_distribuciones_exam_v1';
 var MASTER_PIN='740185';
 var examState = { active:false, pin:'', startTime:null, exits:[], timerInterval:null, pendingExit:null };
 var lastExitLog = 0;
 var lastReturnLog = 0;
 
-// Alternar escribiendo 12345 en el campo Valor de Hipergeométrica.
-// Nota: este código está incluido en el HTML público, no es secreto seguro.
-var EXIT_TRACKING_KEY='calc_tracking_code_12345_v1';
-var exitTrackingEnabled=false; // Conserva el comportamiento actual hasta activarlo.
-var trackingPausedUntil=0;
-try { exitTrackingEnabled=localStorage.getItem(EXIT_TRACKING_KEY)==='on'; } catch(e) {}
+/* ÚNICA MODIFICACIÓN FUNCIONAL: alternar detección desde Hipergeométrica. */
+var EXIT_DETECTION_KEY = 'calc_detectar_salidas_v1';
+var exitDetectionEnabled = true; // Predeterminado: comportamiento ORIGINAL.
+try {
+  var savedDetection = localStorage.getItem(EXIT_DETECTION_KEY);
+  if(savedDetection === 'off') exitDetectionEnabled = false;
+} catch(e) {}
 
+var detectionToastTimer = null;
+function showDetectionToast(text){
+  var old = document.getElementById('detectionToastTemporary');
+  if(old) old.remove();
+  if(detectionToastTimer) clearTimeout(detectionToastTimer);
+  var toast = document.createElement('div');
+  toast.id = 'detectionToastTemporary';
+  toast.textContent = text;
+  toast.setAttribute('role', 'status');
+  Object.assign(toast.style, {
+    position:'fixed', top:'14px', left:'50%', transform:'translateX(-50%)',
+    zIndex:'99999', background:'#202020', color:'#fff',
+    border:'1px solid #454545', borderRadius:'8px',
+    padding:'10px 16px', font:'13px monospace', textAlign:'center',
+    boxShadow:'0 4px 15px rgba(0,0,0,.25)',
+    pointerEvents:'none', maxWidth:'calc(100vw - 32px)'
+  });
+  document.body.appendChild(toast);
+  detectionToastTimer = setTimeout(function(){
+    toast.remove(); detectionToastTimer = null;
+  }, 2400);
+}
 
-function saveExamSession(){
-  try {
+// Se escucha únicamente el valor exacto 12345 en Hipergeométrica.
+input.addEventListener('input', function(){
+  if(state.distKey !== 'hyper' || this.value.trim() !== '12345') return;
+  exitDetectionEnabled = !exitDetectionEnabled;
+  try { localStorage.setItem(EXIT_DETECTION_KEY, exitDetectionEnabled ? 'on' : 'off'); } catch(e) {}
+  this.value = '';
+  render();
+  saveState();
+  showDetectionToast('Detección de salidas ' + (exitDetectionEnabled ? 'ACTIVADA' : 'DESACTIVADA'));
+});
+
+function saveExamSession(closedAt){
+  try{
     localStorage.setItem(EXAM_KEY, JSON.stringify({
-      active:examState.active,
-      pin:examState.pin,
-      startTime:examState.startTime,
-      exits:examState.exits,
-      pendingExit:examState.pendingExit
+      active:examState.active, pin:examState.pin, startTime:examState.startTime,
+      exits:examState.exits, closedAt: closedAt || null
     }));
-  } catch(e) {}
+  }catch(e){}
 }
 function loadExamSession(){
   try{ var r=localStorage.getItem(EXAM_KEY); return r?JSON.parse(r):null; }catch(e){ return null; }
 }
 function clearExamSession(){ try{ localStorage.removeItem(EXAM_KEY); }catch(e){} }
 
-// El contador utiliza el formato visible de la calculadora original.
-function formatExitClock(ms){
-  var d=new Date(ms);
-  var hour=d.getHours();
-  var hh=hour%12 || 12;
-  var mm=('0'+d.getMinutes()).slice(-2);
-  var ss=('0'+d.getSeconds()).slice(-2);
-  return hh+':'+mm+':'+ss+' '+(hour>=12?'p.m.':'a.m.');
-}
 function updateAlertsUI(){
   var el=document.getElementById('examAlerts');
-  if(!el) return;
-  var count=examState.exits.length;
-  var last=count?examState.exits[count-1]:null;
-  el.textContent='Salidas detectadas: '+count+(last&&Number.isFinite(Number(last.at))?' (última: '+formatExitClock(Number(last.at))+')':'');
-  el.classList.toggle('warn',count>0);
-}
-function logExit(reason){
-  if(!exitTrackingEnabled || !examState.active || examState.pendingExit ||
-     Date.now()<trackingPausedUntil) return;
-  var now=Date.now();
-  if(now-lastExitLog<500) return;
-  lastExitLog=now;
-  var event={reason:reason,at:now,returnedAt:null};
-  examState.exits.push(event);
-  examState.pendingExit=event;
-  saveExamSession();
-  updateAlertsUI();
-}
-function logReturn(){
-  if(!examState.active || !examState.pendingExit) return;
-  var event=examState.pendingExit;
-  event.returnedAt=Date.now();
-  examState.pendingExit=null;
-  lastReturnLog=event.returnedAt;
-  saveExamSession();
-  updateAlertsUI();
+  var n=examState.exits.length;
+  if(n===0){ el.textContent='Salidas detectadas: 0'; el.classList.remove('warn'); return; }
+  var last=examState.exits[n-1];
+  el.textContent='Salidas detectadas: '+n+' (última: '+last.ts+')';
+  el.classList.add('warn');
 }
 
-// Aviso temporal: el contenedor se elimina completamente del DOM.
-var trackingToastTimer=null;
-function showTrackingToast(enabled){
-  var previous=document.getElementById('trackingTemporaryToast');
-  if(previous) previous.remove();
-  if(trackingToastTimer!==null){clearTimeout(trackingToastTimer);trackingToastTimer=null;}
-  var toast=document.createElement('div');
-  toast.id='trackingTemporaryToast';
-  toast.setAttribute('role','status');
-  toast.textContent='Detección de salidas '+(enabled?'ACTIVADA':'DESACTIVADA');
-  Object.assign(toast.style,{
-    position:'fixed',left:'50%',top:'20px',transform:'translateX(-50%)',
-    padding:'11px 15px',borderRadius:'9px',zIndex:'11000',
-    background:'var(--board-2)',border:'1px solid var(--line)',
-    color:'var(--chalk)',boxShadow:'0 7px 24px rgba(0,0,0,.23)',
-    fontFamily:'inherit',fontSize:'12px',fontWeight:'600',
-    whiteSpace:'nowrap',pointerEvents:'none',opacity:'1',
-    transition:'opacity 200ms ease'
-  });
-  document.body.appendChild(toast);
-  trackingToastTimer=setTimeout(function(){
-    toast.style.opacity='0';
-    setTimeout(function(){toast.remove();},220);
-    trackingToastTimer=null;
-  },2200);
-}
-function toggleExitTracking(){
-  exitTrackingEnabled=!exitTrackingEnabled;
-  try { localStorage.setItem(EXIT_TRACKING_KEY,exitTrackingEnabled?'on':'off'); } catch(e) {}
-  // Los eventos previos del examen se conservan y no se simulan salidas.
+function logExit(reason){
+  if(!exitDetectionEnabled) return;
+  var now=Date.now();
+  if(now-lastExitLog<1500) return;
+  lastExitLog=now;
+  var ts=new Date().toLocaleTimeString();
+  var entry={ts:ts, start:now, reason:reason||null, durationMs:null};
+  examState.exits.push(entry);
+  examState.pendingExit=entry;
   updateAlertsUI();
-  showTrackingToast(exitTrackingEnabled);
+  saveExamSession();
+}
+
+function logReturn(){
+  var now=Date.now();
+  if(!examState.pendingExit) return;
+  if(now-lastReturnLog<400) return;
+  lastReturnLog=now;
+  examState.pendingExit.durationMs=now-examState.pendingExit.start;
+  examState.pendingExit=null;
+  saveExamSession();
 }
 
 function formatDuration(ms){
   if(ms===null||ms===undefined) return 'sin regreso registrado';
-  var s=Math.max(0,Math.round(ms/1000));
+  var s=Math.round(ms/1000);
   if(s<60) return 'fuera '+s+' seg';
   var m=Math.floor(s/60), rs=s%60;
   return 'fuera '+m+' min '+rs+' seg';
@@ -1053,8 +1040,7 @@ document.getElementById('examToggleBtn').addEventListener('click', function(){
 document.getElementById('examSetupConfirm').addEventListener('click', function(){
   var pin=(document.getElementById('examSetupPin').value||'').trim();
   if(!pin){ document.getElementById('examSetupError').textContent='Ingresá un PIN para poder salir después.'; return; }
-  examState.pin=pin; examState.exits=[]; examState.pendingExit=null;
-  examState.startTime=Date.now(); examState.active=true;
+  examState.pin=pin; examState.exits=[]; examState.startTime=Date.now(); examState.active=true;
   document.getElementById('examSetupModal').classList.remove('show');
   showExamActiveScreen();
   saveExamSession();
@@ -1070,11 +1056,6 @@ document.getElementById('pinSubmit').addEventListener('click', function(){
 });
 
 function endExam(){
-  // Cierra una salida en curso, con su duración efectiva, antes del resumen.
-  if(examState.pendingExit){
-    examState.pendingExit.returnedAt=Date.now();
-    examState.pendingExit=null;
-  }
   examState.active=false;
   clearInterval(examState.timerInterval);
   releaseWakeLock();
@@ -1086,53 +1067,79 @@ function endExam(){
   var overlay=document.getElementById('examOverlay');
   if(wrapEl) document.body.insertBefore(wrapEl, overlay);
   overlay.classList.remove('show');
-  var totalMs=examState.startTime?(Date.now()-examState.startTime):0;
-  var result='Modo examen finalizado.\nDuración total: '+formatElapsed(totalMs)+
-    '\nSalidas detectadas: '+examState.exits.length;
-  if(examState.exits.length){
-    result+='\n\n'+examState.exits.map(function(event){
-      var ms=event.returnedAt==null?null:Math.max(0,event.returnedAt-event.at);
-      return formatExitClock(Number(event.at))+' — '+formatDuration(ms);
+  var n=examState.exits.length;
+  var totalMs = examState.startTime ? (Date.now()-examState.startTime) : 0;
+  var msg='Modo examen finalizado.\nDuración total: '+formatElapsed(totalMs)+'\nSalidas detectadas: '+n;
+  if(n){
+    msg+='\n\n'+examState.exits.map(function(e){
+      return e.ts+' — '+formatDuration(e.durationMs)+(e.reason?(' ('+e.reason+')'):'');
     }).join('\n');
   }
-  alert(result);
+  alert(msg);
 }
-/* Recuperar una sesión en curso tras recargar o volver a la página. */
+
+var CONFIRM_DELAY=500;
+document.addEventListener('visibilitychange', function(){
+  if(!examState.active) return;
+  if(document.hidden){
+    setTimeout(function(){
+      if(document.hidden && examState.active) logExit();
+    }, CONFIRM_DELAY);
+  } else {
+    logReturn(); requestWakeLock();
+  }
+});
+window.addEventListener('blur', function(){
+  if(!examState.active) return;
+  setTimeout(function(){
+    if(document.hidden && examState.active) logExit();
+  }, CONFIRM_DELAY);
+});
+window.addEventListener('focus', function(){ if(examState.active) logReturn(); });
+document.addEventListener('fullscreenchange', function(){
+  if(!examState.active) return;
+  if(!document.fullscreenElement){
+    setTimeout(function(){
+      if(!examState.active) return;
+      if(document.hidden){ logExit('salió de pantalla completa'); }
+      else if(!document.fullscreenElement){ requestFS(); }
+    }, CONFIRM_DELAY);
+  }
+});
+document.addEventListener('webkitfullscreenchange', function(){
+  if(!examState.active) return;
+  if(!document.webkitFullscreenElement){
+    setTimeout(function(){
+      if(!examState.active) return;
+      if(document.hidden){ logExit('salió de pantalla completa'); }
+      else if(!document.webkitFullscreenElement){ requestFS(); }
+    }, CONFIRM_DELAY);
+  }
+});
+
+function persistCloseMarker(){
+  if(!examState.active || !exitDetectionEnabled) return;
+  saveExamSession(Date.now());
+}
+window.addEventListener('pagehide', persistCloseMarker);
+window.addEventListener('beforeunload', function(e){
+  if(!examState.active) return;
+  persistCloseMarker();
+  e.preventDefault();
+  e.returnValue='';
+});
+
 (function resumeExamIfPending(){
   var s=loadExamSession();
   if(!s || !s.active) return;
-  examState.pin=s.pin;
-  examState.startTime=s.startTime;
-  examState.exits=Array.isArray(s.exits)?s.exits:[];
-  var last=examState.exits.length?examState.exits[examState.exits.length-1]:null;
-  examState.pendingExit=(last && last.returnedAt===null)?last:null;
-  examState.active=true;
+  examState.pin=s.pin; examState.startTime=s.startTime; examState.exits=s.exits||[]; examState.active=true;
+  if(s.closedAt && exitDetectionEnabled){
+    var gap=Date.now()-s.closedAt;
+    examState.exits.push({ts:new Date(s.closedAt).toLocaleTimeString(), start:s.closedAt, reason:'cerró el navegador', durationMs:gap});
+  }
   showExamActiveScreen();
   saveExamSession();
 })();
-
-/* Controles transparentes del seguimiento. No se detectan todas las salidas
-   en todos los navegadores, especialmente en iOS. */
-document.addEventListener('visibilitychange',function(){
-  if(document.hidden) logExit('Cambio de pestaña o aplicación');
-  else logReturn();
-});
-window.addEventListener('blur',function(){
-  if(!document.hidden) logExit('Pérdida de foco');
-});
-window.addEventListener('focus',function(){ logReturn(); });
-window.addEventListener('pagehide',function(){ logExit('Salida de página'); });
-
-/* Ingresá 12345 en el valor de Hipergeométrica para alternar.
-   Este listener se ejecuta antes del render habitual de la calculadora. */
-document.getElementById('mainInput').addEventListener('input',function(){
-  if(state.distKey!=='hyper' || this.value.trim()!=='12345') return;
-  this.value='';
-  toggleExitTracking();
-},true);
-
-if(examState.active && examState.pendingExit && !document.hidden) logReturn();
-updateAlertsUI();
 </script>
 </body>
 </html>
