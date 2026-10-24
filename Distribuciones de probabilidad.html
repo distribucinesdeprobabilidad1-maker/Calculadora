@@ -880,12 +880,21 @@ function loadExamSession(){
 }
 function clearExamSession(){ try{ localStorage.removeItem(EXAM_KEY); }catch(e){} }
 
+// El contador utiliza el formato visible de la calculadora original.
+function formatExitClock(ms){
+  var d=new Date(ms);
+  var hour=d.getHours();
+  var hh=hour%12 || 12;
+  var mm=('0'+d.getMinutes()).slice(-2);
+  var ss=('0'+d.getSeconds()).slice(-2);
+  return hh+':'+mm+':'+ss+' '+(hour>=12?'p.m.':'a.m.');
+}
 function updateAlertsUI(){
   var el=document.getElementById('examAlerts');
   if(!el) return;
   var count=examState.exits.length;
-  // Mantener exactamente el texto visible de la interfaz original.
-  el.textContent='Salidas detectadas: '+count;
+  var last=count?examState.exits[count-1]:null;
+  el.textContent='Salidas detectadas: '+count+(last&&Number.isFinite(Number(last.at))?' (última: '+formatExitClock(Number(last.at))+')':'');
   el.classList.toggle('warn',count>0);
 }
 function logExit(reason){
@@ -902,12 +911,14 @@ function logExit(reason){
 }
 function logReturn(){
   if(!examState.active || !examState.pendingExit) return;
-  examState.pendingExit.returnedAt=Date.now();
+  var event=examState.pendingExit;
+  event.returnedAt=Date.now();
   examState.pendingExit=null;
-  lastReturnLog=Date.now();
+  lastReturnLog=event.returnedAt;
   saveExamSession();
   updateAlertsUI();
 }
+
 // Aviso temporal: el contenedor se elimina completamente del DOM.
 var trackingToastTimer=null;
 function showTrackingToast(enabled){
@@ -944,7 +955,7 @@ function toggleExitTracking(){
 
 function formatDuration(ms){
   if(ms===null||ms===undefined) return 'sin regreso registrado';
-  var s=Math.round(ms/1000);
+  var s=Math.max(0,Math.round(ms/1000));
   if(s<60) return 'fuera '+s+' seg';
   var m=Math.floor(s/60), rs=s%60;
   return 'fuera '+m+' min '+rs+' seg';
@@ -1059,6 +1070,11 @@ document.getElementById('pinSubmit').addEventListener('click', function(){
 });
 
 function endExam(){
+  // Cierra una salida en curso, con su duración efectiva, antes del resumen.
+  if(examState.pendingExit){
+    examState.pendingExit.returnedAt=Date.now();
+    examState.pendingExit=null;
+  }
   examState.active=false;
   clearInterval(examState.timerInterval);
   releaseWakeLock();
@@ -1071,7 +1087,15 @@ function endExam(){
   if(wrapEl) document.body.insertBefore(wrapEl, overlay);
   overlay.classList.remove('show');
   var totalMs=examState.startTime?(Date.now()-examState.startTime):0;
-  alert('Modo examen finalizado.\nDuración total: '+formatElapsed(totalMs)+'\nSalidas detectadas: '+examState.exits.length);
+  var result='Modo examen finalizado.\nDuración total: '+formatElapsed(totalMs)+
+    '\nSalidas detectadas: '+examState.exits.length;
+  if(examState.exits.length){
+    result+='\n\n'+examState.exits.map(function(event){
+      var ms=event.returnedAt==null?null:Math.max(0,event.returnedAt-event.at);
+      return formatExitClock(Number(event.at))+' — '+formatDuration(ms);
+    }).join('\n');
+  }
+  alert(result);
 }
 /* Recuperar una sesión en curso tras recargar o volver a la página. */
 (function resumeExamIfPending(){
